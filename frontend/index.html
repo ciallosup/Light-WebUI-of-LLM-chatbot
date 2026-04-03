@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地 LLM 聊天</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>会话</h2>
+        <div class="header-actions">
+          <button id="new-conv">+ 新建</button>
+          <button id="toggle-sidebar" title="折叠侧边栏">⇔</button>
+        </div>
+      </div>
+      <div id="sidebar-content">
+        <input id="conv-search" type="text" placeholder="搜索历史对话" />
+        <ul id="conv-list"></ul>
+
+        <div class="bg-panel" id="bg-panel">
+          <div class="panel-header">
+            <h3>背景自定义</h3>
+            <button id="toggle-bg-panel" class="mini-btn">折叠</button>
+          </div>
+          <div class="panel-body" id="bg-panel-body">
+            <input id="bg-url" type="text" placeholder="输入背景图 URL" />
+            <div class="bg-actions">
+              <button id="apply-bg">应用URL</button>
+              <button id="clear-bg">清空</button>
+            </div>
+            <div class="bg-actions">
+              <label for="bg-file" class="file-like-btn">上传背景图</label>
+              <input id="bg-file" type="file" accept="image/*" hidden />
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-panel" id="system-panel">
+          <div class="panel-header">
+            <h3>System Prompt</h3>
+            <button id="toggle-system-panel" class="mini-btn">折叠</button>
+          </div>
+          <div class="panel-body" id="system-panel-body">
+            <textarea id="system-prompt" class="panel-textarea" placeholder="在这里编辑系统提示词（全局生效）"></textarea>
+            <div class="bg-actions">
+              <button id="save-system-prompt">保存 Prompt</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="chat-panel">
+      <div id="messages" class="messages"></div>
+
+      <div class="pending" id="pending"></div>
+
+      <div class="composer">
+        <textarea id="input" placeholder="输入消息，支持粘贴图片 (Ctrl+V)"></textarea>
+        <div class="actions">
+          <select id="model-select"></select>
+          <label class="stream-toggle"><input id="stream-toggle" type="checkbox" checked /> 流式输出</label>
+          <input id="file-input" type="file" multiple accept=".txt,.md,.pdf,.docx,image/*" />
+          <button id="send">发送</button>
+          <button id="delete-conv" class="danger">删除当前会话</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

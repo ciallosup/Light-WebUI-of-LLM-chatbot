@@ -1,47 +1,157 @@
-# Local LLM Web Chat (Python + FastAPI)
+# Light WebUI of LLM Chatbot
 
-## 功能
-- 文本输入发送
-- 流式输出开关（SSE）
-- 富文本渲染（Markdown）+ 数学公式渲染（KaTeX）
-- 文件上传（txt/md/pdf/docx）
-- 图片上传 / 粘贴上传
-- 文件上传按钮支持图片与文本文件混传
-- 会话创建、切换、删除
-- 历史会话搜索
-- 模型切换（运行时切换，无需改 `.env`）
-- 首轮消息智能标题总结（LLM 优先，规则兜底）
-- 自定义聊天背景（URL/本地上传，自动本地持久化）
+中文 | [English](#english)
 
-## 1. 安装依赖
+一个本地运行的轻量级 LLM WebUI：后端使用 FastAPI，前端为原生 HTML/CSS/JS，支持第三方兼容 OpenAI 的 Chat Completions API。
+
+## 功能特性（中文）
+
+- 聊天对话：文本发送、会话创建/切换/删除
+- 流式输出：SSE 实时返回模型增量内容
+- 富文本渲染：Markdown + KaTeX 数学公式
+- 多模态输入：
+  - 文本文件上传（`.txt/.md/.pdf/.docx`）并提取内容作为上下文
+  - 图片上传与剪贴板粘贴上传
+- 历史能力：会话搜索（标题 + 消息内容）
+- 模型能力：
+  - 运行时切换模型（无需改 `.env`）
+  - 支持预配置可选模型列表
+- Prompt 管理：支持保存全局 System Prompt
+- UI 个性化：
+  - 聊天背景图 URL / 本地上传并持久化
+  - 侧边栏与面板折叠状态持久化
+  - 折叠图标/文案支持前端配置化
+
+## 技术栈
+
+- **Backend**: FastAPI, SQLAlchemy, SQLite
+- **Frontend**: Vanilla JS, HTML, CSS
+- **LLM Client**: 兼容 OpenAI Chat Completions 的第三方 API
+
+## 快速开始
+
+### 1) 安装依赖
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2. 配置环境变量
+### 2) 配置环境变量
+
 ```bash
 copy .env.example .env
 ```
-编辑 `.env`，填入第三方 LLM API 的 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`。  
-可选：配置 `LLM_MODELS=model_a,model_b,model_c` 作为前端可切换模型列表。
-可选：配置 `LLM_TIMEOUT_SEC=180`（秒），用于慢模型（如 GPT5.4）避免本地请求过早超时。
 
-## 3. 启动服务
+然后编辑 `.env`（不要提交到仓库）：
+
+- `LLM_BASE_URL`：第三方 API Base URL
+- `LLM_API_KEY`：API Key
+- `LLM_MODEL`：默认模型
+- `LLM_MODELS`：前端下拉可选模型（逗号分隔）
+- `LLM_CHAT_PATH`：默认 `/v1/chat/completions`
+- `LLM_TIMEOUT_SEC`：请求超时秒数（慢模型建议调大）
+- `MAX_UPLOAD_MB`：上传大小限制（MB）
+
+### 3) 启动服务
+
 ```bash
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-浏览器打开：
-- http://127.0.0.1:8000
+浏览器访问：<http://127.0.0.1:8000>
 
-## 说明
-- 若未配置 LLM 地址/模型，后端会返回“本地模拟回复”用于联调。
-- 当前数据库为本地 `chat.db`（SQLite）。
+## UI 配置：折叠图标/文案自定义
 
-## 新增接口（第二阶段）
-- `GET /api/settings/models`：获取可选模型与当前模型
-- `PUT /api/settings/model`：更新当前模型（运行时生效）
-- `GET /api/conversations/search?q=关键词`：搜索历史会话（标题 + 消息内容）
-- `POST /api/chat/stream`：流式聊天输出（SSE）
+在 `frontend/app.js` 中编辑 `uiConfig`：
+
+```js
+const uiConfig = {
+  sidebarToggle: {
+    collapsed: '☰',
+    expanded: '⇔',
+  },
+  panelToggle: {
+    collapsed: '展开',
+    expanded: '折叠',
+  },
+};
+```
+
+说明：
+- `sidebarToggle`: 控制左侧边栏折叠按钮图标
+- `panelToggle`: 控制“背景自定义 / System Prompt”面板折叠按钮文案
+
+## 主要 API（简要）
+
+- `POST /api/chat/send`：非流式聊天
+- `POST /api/chat/stream`：流式聊天（SSE）
+- `GET /api/conversations`：会话列表
+- `POST /api/conversations`：新建会话
+- `DELETE /api/conversations/{id}`：删除会话
+- `GET /api/conversations/search?q=...`：会话搜索
+- `GET /api/settings/models`：获取模型列表与当前模型
+- `PUT /api/settings/model`：更新当前模型
+- `GET /api/settings/system-prompt`：读取系统提示词
+- `PUT /api/settings/system-prompt`：保存系统提示词
+- `POST /api/upload/file|image|background`：上传文本/图片/背景
+
+## 注意事项
+
+- `.env`、`chat.db`、`uploads/` 默认已在 `.gitignore` 中，避免敏感信息和本地数据泄露。
+- 未配置完整 LLM 参数时，后端可返回模拟回复用于联调。
+
+---
+
+## English
+
+Lightweight local WebUI for LLM chat. The backend is built with FastAPI and the frontend is plain HTML/CSS/JavaScript. It works with third-party APIs compatible with OpenAI Chat Completions.
+
+### Features
+
+- Chat basics: send messages, create/switch/delete conversations
+- Streaming output via SSE
+- Rich rendering: Markdown + KaTeX math
+- Multimodal input:
+  - Text file upload (`.txt/.md/.pdf/.docx`) with extracted context
+  - Image upload and clipboard paste
+- Conversation search (title + message content)
+- Runtime model switching (without editing `.env`)
+- Global System Prompt save/load
+- UI personalization:
+  - Custom chat background (URL/upload + persistence)
+  - Collapsed state persistence for sidebar/panels
+  - Configurable collapse icons/labels
+
+### Quick Start
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open: <http://127.0.0.1:8000>
+
+### Environment Variables
+
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- `LLM_MODELS` (comma-separated model list for UI)
+- `LLM_CHAT_PATH` (default: `/v1/chat/completions`)
+- `LLM_TIMEOUT_SEC`, `MAX_UPLOAD_MB`, `HOST`, `PORT`
+
+### UI Config (Collapse Icons/Labels)
+
+Edit `uiConfig` in `frontend/app.js`:
+
+```js
+const uiConfig = {
+  sidebarToggle: { collapsed: '☰', expanded: '⇔' },
+  panelToggle: { collapsed: 'Expand', expanded: 'Collapse' },
+};
+```
+
+You can replace icons/text to match your preferred style.

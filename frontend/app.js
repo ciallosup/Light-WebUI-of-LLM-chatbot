@@ -141,6 +141,18 @@ const state = {
   }
 };
 
+// UI 可配置项（后续可扩展为设置页动态修改）
+const uiConfig = {
+  sidebarToggle: {
+    collapsed: '☰',
+    expanded: '⇔',
+  },
+  panelToggle: {
+    collapsed: '展开',
+    expanded: '折叠',
+  },
+};
+
 const el = {
   layout: document.querySelector('.layout'),
   convList: document.getElementById('conv-list'),
@@ -170,13 +182,17 @@ const el = {
 
 function applySidebarCollapsed(collapsed) {
   el.layout.classList.toggle('sidebar-collapsed', !!collapsed);
-  el.toggleSidebar.textContent = collapsed ? '☰' : '⇔';
+  el.toggleSidebar.textContent = collapsed
+    ? uiConfig.sidebarToggle.collapsed
+    : uiConfig.sidebarToggle.expanded;
   localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
 }
 
 function applyPanelCollapsed(panelEl, toggleBtn, key, collapsed) {
   panelEl.classList.toggle('collapsed', !!collapsed);
-  toggleBtn.textContent = collapsed ? '展开' : '折叠';
+  toggleBtn.textContent = collapsed
+    ? uiConfig.panelToggle.collapsed
+    : uiConfig.panelToggle.expanded;
   localStorage.setItem(key, collapsed ? '1' : '0');
 }
 

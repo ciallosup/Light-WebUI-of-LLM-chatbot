@@ -21,6 +21,12 @@
   - 聊天背景图 URL / 本地上传并持久化
   - 侧边栏与面板折叠状态持久化
   - 折叠图标/文案支持前端配置化
+- 稳定性增强（近期）：
+  - 流式回复在异常中断时也会尽量落库（保留 partial 内容）
+  - 流式消息支持耗时统计（`latency_ms`）并在前端展示
+  - 智能自动滚动：手动上滚查看历史时不再被强制拉回底部
+  - 流式请求与会话绑定隔离：切换会话时不串流、不污染当前会话
+  - 新会话在首轮回复完成后自动生成标题（避免长期“新对话”）
 
 ## 技术栈
 
@@ -123,6 +129,12 @@ Lightweight local WebUI for LLM chat. The backend is built with FastAPI and the 
   - Custom chat background (URL/upload + persistence)
   - Collapsed state persistence for sidebar/panels
   - Configurable collapse icons/labels
+- Recent reliability updates:
+  - Streaming replies persist partial content on abnormal interruption
+  - Reply latency (`latency_ms`) is recorded and shown in UI
+  - Smart auto-scroll: no forced jump to bottom while user is reading history
+  - Stream-to-conversation isolation to avoid cross-conversation rendering
+  - Auto title generation after the first completed assistant reply
 
 ### Quick Start
 

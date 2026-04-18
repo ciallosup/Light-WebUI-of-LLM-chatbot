@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.db import init_db
@@ -48,3 +48,11 @@ def index():
     if index_file.exists():
         return FileResponse(str(index_file))
     return {"status": "ok", "message": "Frontend not found. Please create frontend/index.html"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    favicon_file = frontend_dir / "favicon.ico"
+    if favicon_file.exists():
+        return FileResponse(str(favicon_file))
+    return Response(status_code=204)

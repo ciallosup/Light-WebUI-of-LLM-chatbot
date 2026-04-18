@@ -43,11 +43,12 @@ const api = {
     if (!r.ok) throw new Error(await this._readError(r, '发送失败'));
     return r.json();
   },
-  async streamChat(payload, onEvent) {
+  async streamChat(payload, onEvent, options = {}) {
     const resp = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: options.signal
     });
     if (!resp.ok || !resp.body) throw new Error(await this._readError(resp, '流式请求失败'));
 
@@ -135,6 +136,9 @@ const state = {
   pendingImages: [],
   selectedModel: '',
   conversations: [],
+  autoScrollEnabled: true,
+  activeStream: null,
+  streamRequestSeq: 0,
   sendStatus: {
     phase: 'idle',
     message: ''
@@ -302,6 +306,40 @@ function setSendStatus(phase, message = '') {
   renderPending();
 }
 
+function isNearBottom(threshold = 40) {
+  const distance = el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight;
+  return distance <= threshold;
+}
+
+function maybeScrollToBottom(force = false) {
+  if (force || state.autoScrollEnabled) {
+    el.messages.scrollTop = el.messages.scrollHeight;
+  }
+}
+
+function bindMessagesAutoScrollTracking() {
+  el.messages.addEventListener('scroll', () => {
+    state.autoScrollEnabled = isNearBottom();
+  });
+}
+
+function cancelActiveStream() {
+  if (state.activeStream?.controller) {
+    try {
+      state.activeStream.controller.abort();
+    } catch (_) {
+      // ignore
+    }
+  }
+  state.activeStream = null;
+}
+
+function isActiveStreamRequest(requestId, conversationId) {
+  return !!state.activeStream
+    && state.activeStream.requestId === requestId
+    && state.activeStream.conversationId === conversationId;
+}
+
 function renderMessages(messages) {
   el.messages.innerHTML = '';
   messages.forEach(m => {
@@ -329,7 +367,8 @@ function renderMessages(messages) {
 
     el.messages.appendChild(wrap);
   });
-  el.messages.scrollTop = el.messages.scrollHeight;
+  state.autoScrollEnabled = true;
+  maybeScrollToBottom(true);
 }
 
 function parseLatencyMs(attachments) {
@@ -340,14 +379,36 @@ function parseLatencyMs(attachments) {
 }
 
 function appendOrUpdateStreamingAssistant(text) {
-  let div = el.messages.querySelector('.msg.assistant.streaming');
-  if (!div) {
+  let wrap = el.messages.querySelector('.msg-block.assistant.streaming');
+  let div = wrap ? wrap.querySelector('.msg.assistant.streaming') : null;
+
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'msg-block assistant streaming';
+
     div = document.createElement('div');
     div.className = 'msg assistant streaming';
-    el.messages.appendChild(div);
+    wrap.appendChild(div);
+
+    el.messages.appendChild(wrap);
   }
+
   renderAssistantContent(div, text);
-  el.messages.scrollTop = el.messages.scrollHeight;
+  maybeScrollToBottom();
+}
+
+function setStreamingAssistantLatency(latencyMs) {
+  if (!latencyMs || latencyMs <= 0) return;
+  const wrap = el.messages.querySelector('.msg-block.assistant.streaming');
+  if (!wrap) return;
+
+  let latency = wrap.querySelector('.msg-latency');
+  if (!latency) {
+    latency = document.createElement('div');
+    latency.className = 'msg-latency';
+    wrap.appendChild(latency);
+  }
+  latency.textContent = `回答用时 ${(latencyMs / 1000).toFixed(2)}s`;
 }
 
 function ensureWaitingAssistant() {
@@ -357,7 +418,7 @@ function ensureWaitingAssistant() {
   waiting.className = 'msg-block assistant waiting';
   waiting.innerHTML = '<div class="msg assistant waiting-msg"><span class="dotting">消息已发送，思考中</span></div>';
   el.messages.appendChild(waiting);
-  el.messages.scrollTop = el.messages.scrollHeight;
+  maybeScrollToBottom();
 }
 
 function setWaitingAssistantText(text) {
@@ -380,7 +441,7 @@ function appendErrorMessage(text) {
   wrap.appendChild(div);
 
   el.messages.appendChild(wrap);
-  el.messages.scrollTop = el.messages.scrollHeight;
+  maybeScrollToBottom();
 }
 
 function extractThinkingParts(rawText) {
@@ -579,6 +640,7 @@ el.newConv.onclick = async () => {
 
 el.deleteConv.onclick = async () => {
   if (!state.currentConversationId) return;
+  cancelActiveStream();
   await api.deleteConversation(state.currentConversationId);
   state.currentConversationId = null;
   renderMessages([]);
@@ -661,19 +723,27 @@ el.send.onclick = async () => {
   const text = el.input.value.trim();
   if (!text) return;
 
+  let requestConversationId = null;
+  let requestId = null;
+  let hasError = false;
+
   try {
+    cancelActiveStream();
     setSendStatus('sending', '正在发送消息到服务器...');
     el.send.disabled = true;
     await ensureConversation();
+    requestConversationId = state.currentConversationId;
 
-    const existing = await api.getMessages(state.currentConversationId);
+    const existing = await api.getMessages(requestConversationId);
     renderMessages([...existing, { role: 'user', content: text }]);
+    state.autoScrollEnabled = true;
+    maybeScrollToBottom(true);
     ensureWaitingAssistant();
     setWaitingAssistantText('消息已送达，等待模型响应');
     el.input.value = '';
 
     const payload = {
-      conversation_id: state.currentConversationId,
+      conversation_id: requestConversationId,
       message: text,
       file_contexts: state.pendingFileItems.map(x => x.extracted_text),
       images: state.pendingImages,
@@ -683,46 +753,88 @@ el.send.onclick = async () => {
     if (el.streamToggle.checked) {
       let assembled = '';
       let streamError = '';
-      await api.streamChat(payload, (evt) => {
-        if (evt.event === 'meta') {
-          setSendStatus('sending', `已发送，模型 ${evt.model || state.selectedModel || '默认'} 正在思考...`);
-          return;
-        }
-        if (evt.event === 'delta') {
-          removeWaitingAssistant();
-          setSendStatus('sending', '模型回复中...');
-          assembled += evt.delta || '';
-          appendOrUpdateStreamingAssistant(assembled);
-        } else if (evt.event === 'error') {
-          streamError = evt.detail || '流式输出失败';
-        }
-      });
+
+      requestId = ++state.streamRequestSeq;
+      const controller = new AbortController();
+      state.activeStream = {
+        requestId,
+        conversationId: requestConversationId,
+        controller
+      };
+
+      await api.streamChat(
+        payload,
+        (evt) => {
+          if (!isActiveStreamRequest(requestId, requestConversationId)) return;
+          if (state.currentConversationId !== requestConversationId) return;
+
+          if (evt.event === 'meta') {
+            setSendStatus('sending', `已发送，模型 ${evt.model || state.selectedModel || '默认'} 正在思考...`);
+            return;
+          }
+          if (evt.event === 'delta') {
+            removeWaitingAssistant();
+            setSendStatus('sending', '模型回复中...');
+            assembled += evt.delta || '';
+            appendOrUpdateStreamingAssistant(assembled);
+            return;
+          }
+          if (evt.event === 'done') {
+            removeWaitingAssistant();
+            setStreamingAssistantLatency(Number(evt.latency_ms || 0));
+            return;
+          }
+          if (evt.event === 'error') {
+            streamError = evt.detail || '流式输出失败';
+          }
+        },
+        { signal: controller.signal }
+      );
+
       if (streamError) throw new Error(streamError);
     } else {
       setWaitingAssistantText('消息已送达，等待完整回复');
       await api.sendChat(payload);
     }
 
-    removeWaitingAssistant();
+    if (state.currentConversationId === requestConversationId) {
+      removeWaitingAssistant();
+    }
+
     try {
-      const refreshed = await api.getMessages(state.currentConversationId);
-      renderMessages(refreshed);
+      const refreshed = await api.getMessages(requestConversationId);
+      if (state.currentConversationId === requestConversationId) {
+        renderMessages(refreshed);
+      }
       await refreshConversations();
     } catch (refreshErr) {
-      const refreshMsg = extractErrorMessage(refreshErr);
-      setSendStatus('error', `回复已返回，但刷新消息列表失败：${refreshMsg}`);
-      appendErrorMessage(`后处理失败：${refreshMsg}`);
+      if (state.currentConversationId === requestConversationId) {
+        const refreshMsg = extractErrorMessage(refreshErr);
+        setSendStatus('error', `回复已返回，但刷新消息列表失败：${refreshMsg}`);
+        appendErrorMessage(`后处理失败：${refreshMsg}`);
+        hasError = true;
+      }
     }
 
     state.pendingFileItems = [];
     state.pendingImages = [];
-    setSendStatus('idle', '');
   } catch (err) {
-    removeWaitingAssistant();
-    const msg = extractErrorMessage(err);
-    appendErrorMessage(`发送失败：${msg}`);
-    setSendStatus('error', `发送失败：${msg}`);
+    if (err?.name === 'AbortError') {
+      // 主动中断，静默处理
+    } else if (state.currentConversationId === requestConversationId) {
+      removeWaitingAssistant();
+      const msg = extractErrorMessage(err);
+      appendErrorMessage(`发送失败：${msg}`);
+      setSendStatus('error', `发送失败：${msg}`);
+      hasError = true;
+    }
   } finally {
+    if (requestId !== null && state.activeStream?.requestId === requestId) {
+      state.activeStream = null;
+    }
+    if (!hasError && state.sendStatus.phase === 'sending') {
+      setSendStatus('idle', '');
+    }
     el.send.disabled = false;
   }
 };
@@ -761,6 +873,7 @@ el.bgFile.onchange = async (e) => {
 };
 
 (async function init() {
+  bindMessagesAutoScrollTracking();
   applySidebarCollapsed(localStorage.getItem('sidebar_collapsed') === '1');
   applyPanelCollapsed(el.bgPanel, el.toggleBgPanel, 'bg_panel_collapsed', localStorage.getItem('bg_panel_collapsed') === '1');
   applyPanelCollapsed(

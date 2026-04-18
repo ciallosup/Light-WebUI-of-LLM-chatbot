@@ -93,7 +93,11 @@ async def chat_completion_with_model(
         status = exc.response.status_code if exc.response is not None else "unknown"
         body = ""
         if exc.response is not None:
-            body = (exc.response.text or "")[:300]
+            try:
+                raw = await exc.response.aread()
+                body = raw.decode("utf-8", errors="ignore")[:300]
+            except Exception:
+                body = ""
         raise RuntimeError(f"LLM upstream returned status {status}: {body}") from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(f"LLM network error: {exc}") from exc
@@ -236,7 +240,11 @@ async def stream_chat_completion_with_model(
         status = exc.response.status_code if exc.response is not None else "unknown"
         body = ""
         if exc.response is not None:
-            body = (exc.response.text or "")[:300]
+            try:
+                raw = await exc.response.aread()
+                body = raw.decode("utf-8", errors="ignore")[:300]
+            except Exception:
+                body = ""
         raise RuntimeError(f"LLM upstream returned status {status}: {body}") from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(f"LLM network error: {exc}") from exc

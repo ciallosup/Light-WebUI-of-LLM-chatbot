@@ -19,3 +19,9 @@ Thumbs.db
 
 .vscode/
 .idea/
+
+# Test / lint / runtime artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log

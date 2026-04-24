@@ -1,4 +1,4 @@
-# Light WebUI of LLM Chatbot
+# Light WebUI of LLM Chat
 
 中文 | [English](#english)
 

@@ -1,4 +1,9 @@
+// 版本标记：用于在 DevTools Console 中确认浏览器加载到的是最新版本。
+// 修复"切换会话再换回内容不显示 / 流式输出错误"问题。
+console.info('[chat-ui] app.js loaded, build=2026-05-03-stream-buffer-v2');
+
 const api = {
+
   async _readError(resp, fallback = '请求失败') {
     const text = await resp.text();
     let detail = text;
@@ -56,29 +61,58 @@ const api = {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+    // 用 try/finally 保证 reader 在异常（如 abort）路径下也会被释放，
+    // 避免浏览器层面 ReadableStream 资源泄漏。
+    try {
+      while (true) {
+        let chunkResult;
+        try {
+          chunkResult = await reader.read();
+        } catch (err) {
+          // signal.abort() 会让 reader.read() 抛 DOMException，向上抛出由调用方区分静默处理。
+          if (options.signal?.aborted) {
+            const abortErr = new Error('aborted');
+            abortErr.name = 'AbortError';
+            throw abortErr;
+          }
+          throw err;
+        }
+        const { done, value } = chunkResult;
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      const chunks = buffer.split('\n\n');
-      buffer = chunks.pop() || '';
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() || '';
 
-      for (const chunk of chunks) {
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6);
-          try {
-            const data = JSON.parse(raw);
-            onEvent?.(data);
-          } catch (_) {
-            // ignore invalid event lines
+        for (const chunk of chunks) {
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6);
+            try {
+              const data = JSON.parse(raw);
+              onEvent?.(data);
+            } catch (_) {
+              // ignore invalid event lines
+            }
           }
         }
       }
+    } finally {
+      try {
+        // cancel() 会使后续 read() 立即结束并解锁 stream，避免 reader 持有锁导致泄漏。
+        await reader.cancel().catch(() => {});
+      } catch (_) {
+        // ignore
+      }
+      try {
+        reader.releaseLock();
+      } catch (_) {
+        // already released or in invalid state
+      }
     }
   },
+
   async uploadFile(file) {
     const fd = new FormData();
     fd.append('file', file);
@@ -135,15 +169,22 @@ const state = {
   pendingFileItems: [],
   pendingImages: [],
   selectedModel: '',
+  llmTimeoutSec: 180,
   conversations: [],
   autoScrollEnabled: true,
   activeStream: null,
   streamRequestSeq: 0,
+  // 记录每条流式请求"截至当前已收到的拼接内容"，按 conversation_id 索引。
+  // 即使用户切走会话（detach 状态），后台仍在累积；切回时可立即恢复显示，
+  // 不必等到流完全结束 / 不必依赖刷新。
+  // 形如：{ [conversationId]: { requestId, content, done } }
+  streamBuffers: {},
   sendStatus: {
     phase: 'idle',
     message: ''
   }
 };
+
 
 // UI 可配置项（后续可扩展为设置页动态修改）
 const uiConfig = {
@@ -334,6 +375,27 @@ function cancelActiveStream() {
   state.activeStream = null;
 }
 
+/**
+ * "脱离"当前流但不中止它：清空 activeStream 引用，让前端不再渲染它的事件，
+ * 但服务端仍可继续完成生成并落库（即使前端切换了会话/模型也能保住答案）。
+ * 用法：切换会话/切换模型时调用，避免误杀正在产出的回复。
+ */
+function detachActiveStream() {
+  // 注意：不调用 controller.abort()，让 fetch/SSE 连接继续走完。
+  // 后续到达的 evt 在 send 主循环里会被 isActiveStreamRequest() 过滤，
+  // 因为我们已经把 state.activeStream 置 null。
+  state.activeStream = null;
+}
+
+function hasActiveStream() {
+  return !!state.activeStream;
+}
+
+function activeStreamConversationId() {
+  return state.activeStream ? state.activeStream.conversationId : null;
+}
+
+
 function isActiveStreamRequest(requestId, conversationId) {
   return !!state.activeStream
     && state.activeStream.requestId === requestId
@@ -460,37 +522,45 @@ function extractThinkingParts(rawText) {
     return '';
   });
 
+  const mergedThought = thoughts.filter(Boolean).join('\n\n---\n\n');
+
   return {
-    thoughts,
+    thought: mergedThought,
     main: rest.trim()
   };
 }
 
 function renderAssistantContent(container, rawText) {
-  const { thoughts, main } = extractThinkingParts(rawText);
+  const { thought, main } = extractThinkingParts(rawText);
   container.innerHTML = '';
 
-  thoughts.forEach((t, idx) => {
+  if (thought) {
     const details = document.createElement('details');
     details.className = 'assistant-thought';
-    if (idx === thoughts.length - 1) details.open = false;
 
     const summary = document.createElement('summary');
-    summary.textContent = `思考过程 ${idx + 1}`;
+    summary.textContent = '思考过程';
     details.appendChild(summary);
 
     const body = document.createElement('div');
     body.className = 'assistant-thought-body';
-    renderRichContent(body, t);
+    renderRichContent(body, thought);
     details.appendChild(body);
 
     container.appendChild(details);
-  });
+  }
 
   const mainDiv = document.createElement('div');
   mainDiv.className = 'assistant-main';
-  renderRichContent(mainDiv, main || (thoughts.length > 0 ? '（已隐藏思考过程）' : ''));
+  renderRichContent(mainDiv, main || (thought ? '（已隐藏思考过程）' : ''));
   container.appendChild(mainDiv);
+}
+
+function createIdempotencyKey() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return `idem-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function extractErrorMessage(err) {
@@ -507,8 +577,20 @@ function extractErrorMessage(err) {
   return raw;
 }
 
-async function refreshConversations(forcedItems = null) {
-  const items = forcedItems || await api.getConversations();
+async function refreshConversations(forcedItems = null, options = {}) {
+  let items = [];
+  try {
+    items = forcedItems ?? await api.getConversations();
+  } catch (err) {
+    console.warn('加载会话列表失败', err);
+    if (!options.noRetry) {
+      setTimeout(() => refreshConversations(null, { noRetry: true }), 1200);
+    }
+    return;
+  }
+  if (!Array.isArray(items)) {
+    items = [];
+  }
   state.conversations = items;
   el.convList.innerHTML = '';
 
@@ -517,13 +599,49 @@ async function refreshConversations(forcedItems = null) {
     li.textContent = c.title || `会话 ${c.id}`;
     if (c.id === state.currentConversationId) li.classList.add('active');
     li.onclick = async () => {
+      // 切换会话时：
+      //   - 如果当前活跃流属于"目标会话"（用户切回正在产出的会话），保留它；
+      //   - 否则 detach（不 abort）：让服务端继续完成生成并落库，
+      //     用户切回原会话时可以通过 getMessages 拿到完整答案。
+      if (hasActiveStream() && activeStreamConversationId() !== c.id) {
+        detachActiveStream();
+      }
       state.currentConversationId = c.id;
       await refreshConversations(state.conversations);
       const msgs = await api.getMessages(c.id);
       renderMessages(msgs);
+
+      // 切回有"在途流"的会话：
+      // 关键：buffer 在 send 主流程开始时就已经创建（即使 detach，它仍存在），
+      // 所以不能依赖 hasActiveStream()（detach 后为 false）。
+      // 用 buffer 是否存在 + done 标记来判断"该会话是否仍在流式生成中"。
+      const buf = state.streamBuffers[c.id];
+      if (buf && !buf.done) {
+        if (buf.content) {
+          // 有累积内容：直接续显
+          appendOrUpdateStreamingAssistant(buf.content);
+        } else {
+          // 还没有任何 delta（模型可能在思考阶段）：补一个等待气泡
+          ensureWaitingAssistant();
+          setWaitingAssistantText('该会话仍有未完成的回复，正在恢复...');
+        }
+        // 重新关联 activeStream 引用，让后续到达的 delta 能在主回调里识别为"可见"。
+        // 重要：state.activeStream 重新指向这条流后，isActiveStreamRequest 会再次成立，
+        // 心跳/状态消息也会刷回 UI。但要确保 conversationId 与 requestConversationId 一致。
+        // 这里我们只能恢复"会话维度"——requestId 和 controller 仍由原 send 主流程持有；
+        // 简化做法：只要切回时存在 buffer，就把 controller 留空（无需中止能力，
+        // 因为同会话二次发送仍走 confirm + cancelActiveStream 路径，cancelActiveStream
+        // 会在 controller 缺失时退化为只清空引用）。
+        // 这里**不**重新 attach activeStream（避免与原 send 主流程争抢 controller）。
+        // 真正驱动渲染的逻辑是 delta 回调里的 `state.currentConversationId === requestConversationId`，
+        // 它已经满足。
+      }
+
     };
+
     el.convList.appendChild(li);
   });
+
 
   if (!state.currentConversationId && items.length > 0) {
     state.currentConversationId = items[0].id;
@@ -538,6 +656,10 @@ async function refreshModels() {
   const models = Array.isArray(data.models) ? data.models : [];
   const current = data.current || '';
   state.selectedModel = current;
+  const timeoutSec = Number(data.timeout_sec || 0);
+  if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
+    state.llmTimeoutSec = timeoutSec;
+  }
 
   el.modelSelect.innerHTML = '';
   if (models.length === 0) {
@@ -664,14 +786,21 @@ el.convSearch.addEventListener('input', async () => {
 el.modelSelect.onchange = async () => {
   const model = el.modelSelect.value;
   if (!model) return;
+  // 切换模型不应中止当前正在进行的回复——它带的是旧模型的 payload，
+  // 让它跑完并落库。新模型只对"下一次发送"生效。
+  const wasStreaming = hasActiveStream();
   try {
     const data = await api.updateModel(model);
     state.selectedModel = data.model;
+    if (wasStreaming) {
+      setSendStatus('sending', `已切换默认模型为 ${data.model}，将在下一次发送时生效（当前回复继续使用旧模型）`);
+    }
   } catch (err) {
     alert('模型切换失败: ' + err.message);
     await refreshModels();
   }
 };
+
 
 el.saveSystemPrompt.onclick = async () => {
   const content = el.systemPrompt.value || '';
@@ -728,11 +857,30 @@ el.send.onclick = async () => {
   let hasError = false;
 
   try {
-    cancelActiveStream();
+    // 处理"已有活跃流时再次发送"的边界情况：
+    //   - 当前会话的流：要 abort 才能让新消息发出去（用户语义就是"覆盖上一次"）；
+    //     但 abort 之前后端已加 CancelledError 兜底，会落库 partial，避免回答消失。
+    //   - 别的会话的流：detach（后端继续跑完落库），新发送不影响它。
+    if (hasActiveStream()) {
+      const activeConv = activeStreamConversationId();
+      if (activeConv === state.currentConversationId) {
+        // 同会话：用户在同一个对话里再次发问，确认后中止旧流（旧流的 partial 会被服务端落库）。
+        const ok = window.confirm('当前回复仍在生成中。继续发送将中断当前回复（已生成的部分会保留），是否继续？');
+        if (!ok) {
+          el.send.disabled = false;
+          return;
+        }
+        cancelActiveStream();
+      } else {
+        // 跨会话：让旧流继续在后台完成，新会话的发送独立进行。
+        detachActiveStream();
+      }
+    }
     setSendStatus('sending', '正在发送消息到服务器...');
     el.send.disabled = true;
     await ensureConversation();
     requestConversationId = state.currentConversationId;
+
 
     const existing = await api.getMessages(requestConversationId);
     renderMessages([...existing, { role: 'user', content: text }]);
@@ -748,11 +896,30 @@ el.send.onclick = async () => {
       file_contexts: state.pendingFileItems.map(x => x.extracted_text),
       images: state.pendingImages,
       model: state.selectedModel || null,
+      idempotency_key: createIdempotencyKey(),
     };
 
     if (el.streamToggle.checked) {
       let assembled = '';
       let streamError = '';
+      let streamGotDone = false;
+      let streamGotDelta = false;
+      let streamGotHeartbeat = false;
+      let streamEmptyReply = false;
+      const streamStartedAt = Date.now();
+      // 真正的"模型有动作"时间戳：仅 delta / done 算活跃；心跳只表示连接活着，不代表模型在产出内容。
+      let streamLastDeltaAt = streamStartedAt;
+      const timeoutSec = Number(state.llmTimeoutSec || 0);
+      const streamTimeoutMs = Number.isFinite(timeoutSec) && timeoutSec > 0 ? timeoutSec * 1000 : 180000;
+      const totalSec = Math.max(1, Math.floor(streamTimeoutMs / 1000));
+      let waitingTicker = null;
+
+      const updateWaitingText = () => {
+        if (streamGotDelta || streamGotDone) return;
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - streamStartedAt) / 1000));
+        const hint = streamGotHeartbeat ? '已收到心跳' : '等待响应';
+        setWaitingAssistantText(`消息已送达，模型思考中（已等待 ${elapsedSec}s / ${totalSec}s，${hint}）`);
+      };
 
       requestId = ++state.streamRequestSeq;
       const controller = new AbortController();
@@ -761,40 +928,144 @@ el.send.onclick = async () => {
         conversationId: requestConversationId,
         controller
       };
+      // 即使 detach，仍要让"切回该会话"时能识别出"该会话有在途流"。
+      // 为此预先创建空缓冲（content=''），后续 delta 累加；
+      // 用 done=false 表示"仍在运行"。
+      state.streamBuffers[requestConversationId] = {
+        requestId,
+        content: '',
+        done: false,
+      };
 
-      await api.streamChat(
-        payload,
-        (evt) => {
-          if (!isActiveStreamRequest(requestId, requestConversationId)) return;
-          if (state.currentConversationId !== requestConversationId) return;
+      updateWaitingText();
+      waitingTicker = setInterval(updateWaitingText, 1000);
 
-          if (evt.event === 'meta') {
-            setSendStatus('sending', `已发送，模型 ${evt.model || state.selectedModel || '默认'} 正在思考...`);
-            return;
-          }
-          if (evt.event === 'delta') {
-            removeWaitingAssistant();
-            setSendStatus('sending', '模型回复中...');
-            assembled += evt.delta || '';
-            appendOrUpdateStreamingAssistant(assembled);
-            return;
-          }
-          if (evt.event === 'done') {
-            removeWaitingAssistant();
-            setStreamingAssistantLatency(Number(evt.latency_ms || 0));
-            return;
-          }
-          if (evt.event === 'error') {
-            streamError = evt.detail || '流式输出失败';
-          }
-        },
-        { signal: controller.signal }
-      );
 
+      try {
+        await api.streamChat(
+          payload,
+          (evt) => {
+            // 关键：状态变量（streamGotDone/streamGotDelta/streamError 等）必须在
+            // detach 之后**也**继续累积，否则 stream 自然结束时主流程会把"已正常完成"
+            // 误判为"未收到模型有效输出"并抛错，从而跳过后续 refreshMessages，
+            // 导致用户切回会话后看不到答案。
+            //   - 渲染（DOM 操作）需要"会话仍是当前会话且仍是当前活跃流"才能做；
+            //   - 状态累积仍要做（不依赖 isActiveStreamRequest）。
+            const isVisibleStream = isActiveStreamRequest(requestId, requestConversationId)
+              && state.currentConversationId === requestConversationId;
+
+            if (evt.event === 'meta') {
+              if (isVisibleStream) {
+                setSendStatus('sending', `已发送，模型 ${evt.model || state.selectedModel || '默认'} 正在思考...`);
+              }
+              return;
+            }
+            if (evt.event === 'heartbeat') {
+              streamGotHeartbeat = true;
+              if (isVisibleStream) {
+                setSendStatus('sending', '模型仍在思考中（已收到心跳）...');
+                updateWaitingText();
+              }
+              return;
+            }
+            if (evt.event === 'delta') {
+              streamGotDelta = true;
+              streamLastDeltaAt = Date.now();
+              assembled += evt.delta || '';
+              // 同步缓冲：让用户切回该会话时能立即看到截至此刻的内容
+              state.streamBuffers[requestConversationId] = {
+                requestId,
+                content: assembled,
+                done: false,
+              };
+              // 当前是可见会话：直接渲染（含切回到该会话后从缓冲恢复后再追加 delta 的情形）
+              if (state.currentConversationId === requestConversationId) {
+                removeWaitingAssistant();
+                setSendStatus('sending', '模型回复中...');
+                appendOrUpdateStreamingAssistant(assembled);
+              }
+              return;
+            }
+            if (evt.event === 'done') {
+              streamGotDone = true;
+              streamLastDeltaAt = Date.now();
+              const doneReply = typeof evt.assistant_reply === 'string' ? evt.assistant_reply : '';
+              // 标记缓冲为 done（保留 content 让后续切回时仍可读到，
+              // 但主流程的 finally 阶段会做 cleanup）
+              if (state.streamBuffers[requestConversationId]) {
+                state.streamBuffers[requestConversationId].done = true;
+              }
+              if (isVisibleStream) {
+                setStreamingAssistantLatency(Number(evt.latency_ms || 0));
+                if (!assembled.trim() && !doneReply.trim()) {
+                  streamEmptyReply = true;
+                } else {
+                  removeWaitingAssistant();
+                }
+              } else {
+                // 即使不可见也要标记 empty_reply，让主流程能正确把"detach 期间空回复"识别为错误。
+                if (!assembled.trim() && !doneReply.trim()) {
+                  streamEmptyReply = true;
+                }
+              }
+              return;
+            }
+
+            if (evt.event === 'error') {
+              streamError = evt.detail || '流式输出失败';
+            }
+          },
+          { signal: controller.signal }
+        );
+      } finally {
+        if (waitingTicker) {
+          clearInterval(waitingTicker);
+          waitingTicker = null;
+        }
+      }
+
+
+      if (!streamError && streamEmptyReply) {
+        const waitedSec = Math.max(0, Math.floor((Date.now() - streamStartedAt) / 1000));
+        streamError = `模型返回空内容（已等待 ${waitedSec}s），请重试或切换模型`;
+      }
+
+      if (!streamGotDone && !streamError) {
+        if (streamGotDelta) {
+          streamError = '流式连接异常结束，请重试';
+        } else if (streamGotHeartbeat) {
+          streamError = '流式连接中断（思考未完成），请重试';
+        } else {
+          streamError = '未收到模型有效输出，请重试或切换模型';
+        }
+      }
       if (streamError) throw new Error(streamError);
+
     } else {
-      setWaitingAssistantText('消息已送达，等待完整回复');
-      await api.sendChat(payload);
+      const timeoutSec = Number(state.llmTimeoutSec || 0);
+      const totalSec = Number.isFinite(timeoutSec) && timeoutSec > 0 ? Math.floor(timeoutSec) : 0;
+      const startedAt = Date.now();
+      let waitingTicker = null;
+
+      const updateWaitingText = () => {
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        if (totalSec) {
+          setWaitingAssistantText(`消息已送达，等待完整回复（已等待 ${elapsedSec}s / ${totalSec}s）`);
+        } else {
+          setWaitingAssistantText(`消息已送达，等待完整回复（已等待 ${elapsedSec}s）`);
+        }
+      };
+
+      updateWaitingText();
+      waitingTicker = setInterval(updateWaitingText, 1000);
+      try {
+        await api.sendChat(payload);
+      } finally {
+        if (waitingTicker) {
+          clearInterval(waitingTicker);
+          waitingTicker = null;
+        }
+      }
     }
 
     if (state.currentConversationId === requestConversationId) {
@@ -832,12 +1103,20 @@ el.send.onclick = async () => {
     if (requestId !== null && state.activeStream?.requestId === requestId) {
       state.activeStream = null;
     }
+    // 清理 streamBuffers：流已经结束，缓冲不再需要保留（最终内容已经/将要从 DB 拉取）
+    if (requestConversationId !== null) {
+      const buf = state.streamBuffers[requestConversationId];
+      if (buf && buf.requestId === requestId) {
+        delete state.streamBuffers[requestConversationId];
+      }
+    }
     if (!hasError && state.sendStatus.phase === 'sending') {
       setSendStatus('idle', '');
     }
     el.send.disabled = false;
   }
 };
+
 
 el.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {

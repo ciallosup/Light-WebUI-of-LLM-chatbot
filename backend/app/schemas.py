@@ -34,6 +34,7 @@ class ChatSendRequest(BaseModel):
     file_contexts: List[str] = []
     images: List[ImagePayload] = []
     model: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=128)
 
 
 class ChatSendResponse(BaseModel):

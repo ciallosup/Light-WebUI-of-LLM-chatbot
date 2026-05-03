@@ -25,3 +25,15 @@ Thumbs.db
 .mypy_cache/
 .ruff_cache/
 *.log
+
+# Local sandbox / scratch test files (don't track ad-hoc debug scripts)
+_test_*.py
+_scratch_*.py
+*.bak
+
+# Node / frontend deps if user adds them later
+node_modules/
+.npm/
+package-lock.json.bak
+
+

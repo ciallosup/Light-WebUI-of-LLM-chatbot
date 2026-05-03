@@ -44,7 +44,8 @@ def list_models(session: Session = Depends(get_session)):
     current = get_runtime_model(session)
     if current and current not in models:
         models.append(current)
-    return {"models": models, "current": current}
+    settings = get_settings()
+    return {"models": models, "current": current, "timeout_sec": settings.llm_timeout_sec}
 
 
 @router.get("/system-prompt")

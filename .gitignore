@@ -36,4 +36,10 @@ node_modules/
 .npm/
 package-lock.json.bak
 
+# PyInstaller 打包产物
+dist/
+build/
+*.spec.bak
+
+
 

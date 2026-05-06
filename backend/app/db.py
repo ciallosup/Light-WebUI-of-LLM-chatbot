@@ -4,14 +4,17 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from backend.app._compat import get_db_path
+
 
 def _resolve_db_url() -> str:
     env_path = os.getenv("CHAT_DB_PATH", "").strip()
     if env_path:
         return f"sqlite:///{Path(env_path).expanduser().resolve().as_posix()}"
-    base_dir = Path(__file__).resolve().parents[2]
-    db_path = base_dir / "chat.db"
+    # 使用 _compat 解析：打包模式下放在 exe 旁边，开发模式下放在项目根。
+    db_path = get_db_path()
     return f"sqlite:///{db_path.as_posix()}"
+
 
 
 DATABASE_URL = _resolve_db_url()

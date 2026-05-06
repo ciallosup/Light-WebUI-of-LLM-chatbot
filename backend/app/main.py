@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-
+from backend.app._compat import get_frontend_dir, get_uploads_dir
 from backend.app.config import get_settings
 from backend.app.db import init_db
 from backend.app.middleware import InMemoryRateLimiter, build_rate_limit_middleware, configure_logging
@@ -14,6 +14,7 @@ from backend.app.routers.chat import router as chat_router
 from backend.app.routers.conversations import router as conversations_router
 from backend.app.routers.settings import router as settings_router
 from backend.app.routers.upload import router as upload_router
+
 
 
 app = FastAPI(title="Local LLM Web Chat")
@@ -43,13 +44,14 @@ def on_startup():
     init_db()
 
 
-frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
+frontend_dir = get_frontend_dir()
 if frontend_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dir)), name="assets")
 
-uploads_dir = Path(__file__).resolve().parents[2] / "uploads"
+uploads_dir = get_uploads_dir()
 uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
 
 
 def _asset_mtime(name: str) -> int:

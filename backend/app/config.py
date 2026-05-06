@@ -4,8 +4,13 @@ from functools import lru_cache
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
+from backend.app._compat import get_dotenv_path
 
-load_dotenv()
+# 优先加载 exe 旁边的 .env（打包模式），开发模式下也会找到项目根的 .env。
+load_dotenv(dotenv_path=get_dotenv_path(), override=False)
+# 兜底：再尝试默认搜索（开发模式下 python-dotenv 会向上查找 .env）
+load_dotenv(override=False)
+
 
 
 def _to_bool(value: str | None, default: bool = False) -> bool:

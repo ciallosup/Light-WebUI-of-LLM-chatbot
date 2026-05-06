@@ -6,14 +6,16 @@ from tempfile import NamedTemporaryFile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
+from backend.app._compat import get_uploads_dir
 from backend.app.config import get_settings
 from backend.app.services.file_parser import ALLOWED_TEXT_EXT, parse_text_file, to_base64
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR = Path(__file__).resolve().parents[3] / "uploads" / "backgrounds"
+UPLOAD_DIR = get_uploads_dir() / "backgrounds"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 
 _ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}

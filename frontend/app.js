@@ -1,6 +1,7 @@
 // 版本标记：用于在 DevTools Console 中确认浏览器加载到的是最新版本。
 // 修复"切换会话再换回内容不显示 / 流式输出错误"问题。
-console.info('[chat-ui] app.js loaded, build=2026-05-03-stream-buffer-v2');
+console.info('[chat-ui] app.js loaded, build=2026-05-09-responsive-layout');
+
 
 const api = {
 
@@ -208,7 +209,9 @@ const el = {
   newConv: document.getElementById('new-conv'),
   deleteConv: document.getElementById('delete-conv'),
   fileInput: document.getElementById('file-input'),
+  fileInputLabel: document.getElementById('file-input-label'),
   pending: document.getElementById('pending'),
+
   bgUrl: document.getElementById('bg-url'),
   bgFile: document.getElementById('bg-file'),
   applyBg: document.getElementById('apply-bg'),
@@ -829,9 +832,22 @@ el.toggleSystemPanel.onclick = () => {
 
 el.fileInput.onchange = async (e) => {
   const files = Array.from(e.target.files || []);
+  // 更新文件名标签显示
+  if (el.fileInputLabel) {
+    el.fileInputLabel.textContent = files.length > 0
+      ? files.map(f => f.name).join(', ')
+      : '未选择任何文件';
+  }
   await handleFileSelection(files);
   e.target.value = '';
+  // 上传完成后重置标签
+  if (el.fileInputLabel) {
+    el.fileInputLabel.textContent = files.length > 0
+      ? `已添加 ${files.length} 个文件`
+      : '未选择任何文件';
+  }
 };
+
 
 el.input.addEventListener('paste', async (event) => {
   const items = event.clipboardData?.items || [];

@@ -64,10 +64,15 @@
         <div class="actions">
           <select id="model-select"></select>
           <label class="stream-toggle"><input id="stream-toggle" type="checkbox" checked /> 流式输出</label>
-          <input id="file-input" type="file" multiple accept=".txt,.md,.pdf,.docx,image/*" />
-          <button id="send">发送</button>
-          <button id="delete-conv" class="danger">删除当前会话</button>
+          <label for="file-input" class="file-like-btn" title="上传文件或图片">选择文件</label>
+          <input id="file-input" type="file" multiple accept=".txt,.md,.pdf,.docx,image/*" hidden />
+          <span id="file-input-label" class="file-input-label">未选择任何文件</span>
+          <div class="actions-right">
+            <button id="send">发送</button>
+            <button id="delete-conv" class="danger">删除当前会话</button>
+          </div>
         </div>
+
       </div>
     </main>
   </div>

@@ -150,7 +150,8 @@ async def chat_completion_with_model(
 
     # 兼容 OpenAI 风格
     if "choices" in data and data["choices"]:
-        msg = data["choices"][0].get("message", {})
+        choice0 = data["choices"][0] if isinstance(data["choices"][0], dict) else {}
+        msg = choice0.get("message", {})
         reasoning = ""
         if isinstance(msg, dict):
             if isinstance(msg.get("reasoning_content"), str):
@@ -167,8 +168,21 @@ async def chat_completion_with_model(
         if content:
             return content
 
-    # 兜底
-    return str(data)
+        # choices 存在但 content 与 reasoning 均为空（部分模型如 gemini-pro 在某些
+        # 情况下会返回空 content）——抛出有意义的异常，让上层（标题生成等）走 fallback，
+        # 而不是把整个 JSON dict 转成字符串当作回复内容。
+        finish_reason = choice0.get("finish_reason", "unknown")
+        raise RuntimeError(
+            f"LLM returned empty content (finish_reason={finish_reason!r}). "
+            f"model={data.get('model', 'unknown')!r}"
+        )
+
+    # 真正的兜底：响应中没有 choices 字段（非 OpenAI 格式）
+    raise RuntimeError(
+        f"LLM response missing 'choices' field. "
+        f"keys={list(data.keys())}, model={data.get('model', 'unknown')!r}"
+    )
+
 
 
 def _extract_stream_pieces(data: Dict[str, Any]) -> tuple[str, str]:
